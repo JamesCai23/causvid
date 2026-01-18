@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from causvid.models.wan.causal_inference import InferencePipeline
 from diffusers.utils import export_to_video
 from causvid.data import TextDataset
@@ -6,7 +14,6 @@ from tqdm import tqdm
 import numpy as np
 import argparse
 import torch
-import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config_path", type=str)

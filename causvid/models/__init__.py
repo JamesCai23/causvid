@@ -1,8 +1,8 @@
 from .wan.wan_wrapper import WanTextEncoder, WanVAEWrapper, WanDiffusionWrapper, CausalWanDiffusionWrapper
+from .action_encoder import ActionEncoder
 from causvid.bidirectional_trajectory_pipeline import BidirectionalInferenceWrapper
 from .sdxl.sdxl_wrapper import SDXLWrapper, SDXLTextEncoder, SDXLVAE
 from transformers.models.t5.modeling_t5 import T5Block
-
 
 DIFFUSION_NAME_TO_CLASS = {
     "sdxl": SDXLWrapper,
@@ -54,3 +54,10 @@ BLOCK_NAME_TO_BLOCK_CLASS = {
 
 def get_block_class(model_name):
     return BLOCK_NAME_TO_BLOCK_CLASS[model_name]
+
+ACTION_ENCODER_NAME_TO_CLASS = {
+    "action_mlp": ActionEncoder
+}
+
+def get_action_encoder_wrapper(model_name):
+    return ACTION_ENCODER_NAME_TO_CLASS[model_name]

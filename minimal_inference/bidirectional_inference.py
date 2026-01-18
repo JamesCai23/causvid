@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from causvid.models.wan.bidirectional_inference import BidirectionalInferencePipeline
 from huggingface_hub import hf_hub_download
 from diffusers.utils import export_to_video
@@ -6,7 +14,6 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 import argparse
 import torch
-import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config_path", type=str)

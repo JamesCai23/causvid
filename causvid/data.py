@@ -72,3 +72,44 @@ class ODERegressionLMDBDataset(Dataset):
             "prompts": prompts,
             "ode_latent": torch.tensor(latents, dtype=torch.float32)
         }
+
+
+class ActionI2VLMDBDataset(Dataset):
+    def __init__(self, data_path: str, max_pair: int = int(1e8)):
+        self.env = lmdb.open(data_path, readonly=True,
+                             lock=False, readahead=False, meminit=False)
+
+        self.latents_shape = get_array_shape_from_lmdb(self.env, 'latents')
+        self.actions_shape = get_array_shape_from_lmdb(self.env, 'actions')
+        self.start_latent_shape = get_array_shape_from_lmdb(self.env, 'start_latent')
+        self.max_pair = max_pair
+
+    def __len__(self):
+        return min(self.latents_shape[0], self.max_pair)
+
+    def __getitem__(self, idx):
+        latents = retrieve_row_from_lmdb(
+            self.env,
+            "latents", np.float16, idx, shape=self.latents_shape[1:]
+        )
+        if len(latents.shape) == 4:
+            latents = latents[None, ...]
+
+        actions = retrieve_row_from_lmdb(
+            self.env,
+            "actions", np.float32, idx, shape=self.actions_shape[1:]
+        )
+        start_latent = retrieve_row_from_lmdb(
+            self.env,
+            "start_latent", np.float16, idx, shape=self.start_latent_shape[1:]
+        )
+        prompts = retrieve_row_from_lmdb(
+            self.env,
+            "prompts", str, idx
+        )
+        return {
+            "prompts": prompts,
+            "ode_latent": torch.tensor(latents, dtype=torch.float32),
+            "actions": torch.tensor(actions, dtype=torch.float32),
+            "start_latent": torch.tensor(start_latent, dtype=torch.float32)
+        }

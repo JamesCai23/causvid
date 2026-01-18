@@ -1,4 +1,4 @@
-from causvid.models import get_diffusion_wrapper, get_text_encoder_wrapper, get_vae_wrapper
+from causvid.models import get_diffusion_wrapper, get_text_encoder_wrapper, get_vae_wrapper, get_action_encoder_wrapper
 import torch.nn.functional as F
 from typing import Tuple
 from torch import nn
@@ -41,6 +41,18 @@ class ODERegression(nn.Module):
         self.text_encoder = get_text_encoder_wrapper(
             model_name=args.model_name)()
         self.text_encoder.requires_grad_(False)
+
+        self.action_encoder = None
+        if getattr(args, "action_cond", False):
+            action_encoder_name = getattr(args, "action_encoder_name", "action_mlp")
+            action_dim = getattr(args, "action_dim", 14)
+            action_hidden_dim = getattr(args, "action_hidden_dim", 512)
+            action_embed_dim = getattr(args, "action_embed_dim", 4096)
+            self.action_encoder = get_action_encoder_wrapper(action_encoder_name)(
+                input_dim=action_dim,
+                hidden_dim=action_hidden_dim,
+                output_dim=action_embed_dim
+            )
 
         self.vae = get_vae_wrapper(model_name=args.model_name)()
         self.vae.requires_grad_(False)

@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from causvid.models.wan.causal_inference import InferencePipeline
 from diffusers.utils import export_to_video
 from causvid.data import TextDataset
@@ -5,13 +13,13 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 import argparse
 import torch
-import os
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--config_path", type=str)
 parser.add_argument("--checkpoint_folder", type=str)
 parser.add_argument("--output_folder", type=str)
 parser.add_argument("--prompt_file_path", type=str)
+parser.add_argument("--latent_length", type=int, default=21)
 
 args = parser.parse_args()
 
@@ -32,7 +40,7 @@ pipeline.generator.load_state_dict(
 dataset = TextDataset(args.prompt_file_path)
 
 sampled_noise = torch.randn(
-    [1, 21, 16, 60, 104], device="cuda", dtype=torch.bfloat16
+    [1, args.latent_length, 16, 60, 104], device="cuda", dtype=torch.bfloat16
 )
 
 os.makedirs(args.output_folder, exist_ok=True)

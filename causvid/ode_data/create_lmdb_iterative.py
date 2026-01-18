@@ -31,16 +31,17 @@ def get_array_shape_from_lmdb(env, array_name):
     return image_shape
 
 
-def process_data_dict(data_dict, seen_prompts):
+def process_data_dict(data_dict, seen_prompts, dedupe_prompts=True):
     output_dict = {}
 
     all_videos = []
     all_prompts = []
     for prompt, video in data_dict.items():
-        if prompt in seen_prompts:
-            continue
-        else:
-            seen_prompts.add(prompt)
+        if dedupe_prompts:
+            if prompt in seen_prompts:
+                continue
+            else:
+                seen_prompts.add(prompt)
 
         video = video.half().numpy()
         all_videos.append(video)
@@ -54,6 +55,27 @@ def process_data_dict(data_dict, seen_prompts):
     output_dict['prompts'] = np.array(all_prompts)
 
     return output_dict
+
+
+def _process_action_sample(sample):
+    latents = sample["latents"].half().numpy()
+    actions = np.asarray(sample["actions"], dtype=np.float32)
+    start_latent = sample["start_latent"].half().numpy()
+    prompt = sample["prompt"]
+
+    if actions.ndim == 2:
+        actions = actions[None, ...]
+    if latents.ndim == 4:
+        latents = latents[None, ...]
+    if start_latent.ndim == 4:
+        start_latent = start_latent[None, ...]
+
+    return {
+        "latents": latents,
+        "actions": actions,
+        "start_latent": start_latent,
+        "prompts": np.array([prompt])
+    }
 
 
 def retrieve_row_from_lmdb(lmdb_env, array_name, dtype, row_index, shape=None):
@@ -86,6 +108,8 @@ def main():
                         required=True, help="path to ode pairs")
     parser.add_argument("--lmdb_path", type=str,
                         required=True, help="path to lmdb")
+    parser.add_argument("--no_dedupe_prompts", action="store_true",
+                        help="If set, keep duplicate prompts (default: dedupe).")
 
     args = parser.parse_args()
 
@@ -100,19 +124,32 @@ def main():
 
     seen_prompts = set()  # for deduplication
 
+    last_written = None
     for index, file in tqdm(enumerate(all_files)):
         # read from disk
         data_dict = torch.load(file)
 
-        data_dict = process_data_dict(data_dict, seen_prompts)
+        if isinstance(data_dict, dict) and "latents" in data_dict:
+            processed = _process_action_sample(data_dict)
+            store_arrays_to_lmdb(env, processed, start_index=counter)
+            counter += len(processed["prompts"])
+            last_written = processed
+            continue
+
+        data_dict = process_data_dict(
+            data_dict, seen_prompts, dedupe_prompts=not args.no_dedupe_prompts)
 
         # write to lmdb file
         store_arrays_to_lmdb(env, data_dict, start_index=counter)
         counter += len(data_dict['prompts'])
+        last_written = data_dict
 
     # save each entry's shape to lmdb
+    if last_written is None:
+        raise RuntimeError("No data written to LMDB. Check your input files.")
+
     with env.begin(write=True) as txn:
-        for key, val in data_dict.items():
+        for key, val in last_written.items():
             print(key, val)
             array_shape = np.array(val.shape)
             array_shape[0] = counter

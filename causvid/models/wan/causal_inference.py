@@ -1,7 +1,8 @@
 from causvid.models import (
     get_diffusion_wrapper,
     get_text_encoder_wrapper,
-    get_vae_wrapper
+    get_vae_wrapper,
+    get_action_encoder_wrapper
 )
 from typing import List, Optional
 import torch
@@ -18,6 +19,17 @@ class InferencePipeline(torch.nn.Module):
         self.text_encoder = get_text_encoder_wrapper(
             model_name=args.model_name)()
         self.vae = get_vae_wrapper(model_name=args.model_name)()
+        self.action_encoder = None
+        if getattr(args, "action_cond", False):
+            action_encoder_name = getattr(args, "action_encoder_name", "action_mlp")
+            action_dim = getattr(args, "action_dim", 14)
+            action_hidden_dim = getattr(args, "action_hidden_dim", 512)
+            action_embed_dim = getattr(args, "action_embed_dim", 4096)
+            self.action_encoder = get_action_encoder_wrapper(action_encoder_name)(
+                input_dim=action_dim,
+                hidden_dim=action_hidden_dim,
+                output_dim=action_embed_dim
+            )
 
         # Step 2: Initialize all causal hyperparmeters
         self.denoising_step_list = torch.tensor(
@@ -45,16 +57,26 @@ class InferencePipeline(torch.nn.Module):
         if self.num_frame_per_block > 1:
             self.generator.model.num_frame_per_block = self.num_frame_per_block
 
-    def _initialize_kv_cache(self, batch_size, dtype, device):
+    def _initialize_kv_cache(self, batch_size, dtype, device, num_frames=None):
         """
         Initialize a Per-GPU KV cache for the Wan model.
+        If num_frames is provided, the cache size will be calculated based on it.
+        Otherwise, it uses the default size (32760) for 21 frames.
         """
+        if num_frames is not None:
+            # Calculate required cache size: num_frames * frame_seq_length
+            # This ensures we have enough space for all frames
+            required_cache_size = num_frames * self.frame_seq_length
+        else:
+            # Default size for 21 frames: 21 * 1560 = 32760
+            required_cache_size = 32760
+        
         kv_cache1 = []
 
         for _ in range(self.num_transformer_blocks):
             kv_cache1.append({
-                "k": torch.zeros([batch_size, 32760, 12, 128], dtype=dtype, device=device),
-                "v": torch.zeros([batch_size, 32760, 12, 128], dtype=dtype, device=device)
+                "k": torch.zeros([batch_size, required_cache_size, 12, 128], dtype=dtype, device=device),
+                "v": torch.zeros([batch_size, required_cache_size, 12, 128], dtype=dtype, device=device)
             })
 
         self.kv_cache1 = kv_cache1  # always store the clean cache
@@ -74,7 +96,7 @@ class InferencePipeline(torch.nn.Module):
 
         self.crossattn_cache = crossattn_cache  # always store the clean cache
 
-    def inference(self, noise: torch.Tensor, text_prompts: List[str], start_latents: Optional[torch.Tensor] = None, return_latents: bool = False) -> torch.Tensor:
+    def inference(self, noise: torch.Tensor, text_prompts: List[str], start_latents: Optional[torch.Tensor] = None, actions: Optional[torch.Tensor] = None, return_latents: bool = False) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
         Inputs:
@@ -86,9 +108,23 @@ class InferencePipeline(torch.nn.Module):
                 (batch_size, num_frames, num_channels, height, width). It is normalized to be in the range [0, 1].
         """
         batch_size, num_frames, num_channels, height, width = noise.shape
+        
+        # Validate that num_frames is divisible by num_frame_per_block
+        if num_frames % self.num_frame_per_block != 0:
+            raise ValueError(
+                f"num_frames ({num_frames}) must be divisible by num_frame_per_block ({self.num_frame_per_block}). "
+                f"Please adjust the number of frames to be a multiple of {self.num_frame_per_block}."
+            )
+        
         conditional_dict = self.text_encoder(
             text_prompts=text_prompts
         )
+        if self.action_encoder is not None and actions is not None:
+            self.action_encoder = self.action_encoder.to(
+                device=noise.device, dtype=torch.float32)
+            actions = actions.to(device=noise.device, dtype=torch.float32)
+            action_embeds = self.action_encoder(actions)
+            conditional_dict["action_embeds"] = action_embeds
 
         output = torch.zeros(
             [batch_size, num_frames, num_channels, height, width],
@@ -96,12 +132,17 @@ class InferencePipeline(torch.nn.Module):
             dtype=noise.dtype
         )
 
-        # Step 1: Initialize KV cache
+        # Step 1: Initialize or resize KV cache if needed
+        # Calculate required cache size based on num_frames
+        required_cache_size = num_frames * self.frame_seq_length
+        
         if self.kv_cache1 is None:
+            # First time initialization
             self._initialize_kv_cache(
                 batch_size=batch_size,
                 dtype=noise.dtype,
-                device=noise.device
+                device=noise.device,
+                num_frames=num_frames
             )
 
             self._initialize_crossattn_cache(
@@ -110,6 +151,18 @@ class InferencePipeline(torch.nn.Module):
                 device=noise.device
             )
         else:
+            # Check if existing cache is large enough
+            current_cache_size = self.kv_cache1[0]["k"].shape[1]
+            if required_cache_size > current_cache_size:
+                # Need to resize: reinitialize with larger cache
+                print(f"Resizing KV cache from {current_cache_size} to {required_cache_size} for {num_frames} frames")
+                self._initialize_kv_cache(
+                    batch_size=batch_size,
+                    dtype=noise.dtype,
+                    device=noise.device,
+                    num_frames=num_frames
+                )
+            
             # reset cross attn cache
             for block_index in range(self.num_transformer_blocks):
                 self.crossattn_cache[block_index]["is_init"] = False

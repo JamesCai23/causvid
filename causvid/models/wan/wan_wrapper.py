@@ -169,6 +169,20 @@ class WanDiffusionWrapper(DiffusionModelInterface):
         current_end: Optional[int] = None
     ) -> torch.Tensor:
         prompt_embeds = conditional_dict["prompt_embeds"]
+        action_embeds = conditional_dict.get("action_embeds", None)
+        if action_embeds is not None:
+            # prepend action tokens and truncate text to keep within text_len
+            if action_embeds.device != prompt_embeds.device:
+                action_embeds = action_embeds.to(prompt_embeds.device)
+            action_embeds = action_embeds.to(prompt_embeds.dtype)
+            max_text_len = prompt_embeds.shape[1]
+            action_len = action_embeds.shape[1]
+            if action_len >= max_text_len:
+                prompt_embeds = prompt_embeds[:, :0, :]
+                action_embeds = action_embeds[:, :max_text_len, :]
+            else:
+                prompt_embeds = prompt_embeds[:, :max_text_len - action_len, :]
+            prompt_embeds = torch.cat([action_embeds, prompt_embeds], dim=1)
 
         # [B, F] -> [B]
         if self.uniform_timestep:

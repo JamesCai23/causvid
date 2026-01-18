@@ -204,3 +204,5 @@ cogvideox_output
 
 VBench
 *.pt
+/ckpt
+/wan_models

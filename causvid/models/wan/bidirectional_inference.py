@@ -1,7 +1,8 @@
 from causvid.models import (
     get_diffusion_wrapper,
     get_text_encoder_wrapper,
-    get_vae_wrapper
+    get_vae_wrapper,
+    get_action_encoder_wrapper
 )
 from typing import List
 import torch
@@ -18,6 +19,17 @@ class BidirectionalInferencePipeline(torch.nn.Module):
         self.text_encoder = get_text_encoder_wrapper(
             model_name=args.model_name)()
         self.vae = get_vae_wrapper(model_name=args.model_name)()
+        self.action_encoder = None
+        if getattr(args, "action_cond", False):
+            action_encoder_name = getattr(args, "action_encoder_name", "action_mlp")
+            action_dim = getattr(args, "action_dim", 14)
+            action_hidden_dim = getattr(args, "action_hidden_dim", 512)
+            action_embed_dim = getattr(args, "action_embed_dim", 4096)
+            self.action_encoder = get_action_encoder_wrapper(action_encoder_name)(
+                input_dim=action_dim,
+                hidden_dim=action_hidden_dim,
+                output_dim=action_embed_dim
+            )
 
         # Step 2: Initialize all bidirectional wan hyperparmeters
         self.denoising_step_list = torch.tensor(
@@ -28,7 +40,7 @@ class BidirectionalInferencePipeline(torch.nn.Module):
             timesteps = torch.cat((self.scheduler.timesteps.cpu(), torch.tensor([0], dtype=torch.float32))).cuda()
             self.denoising_step_list = timesteps[1000 - self.denoising_step_list]
 
-    def inference(self, noise: torch.Tensor, text_prompts: List[str]) -> torch.Tensor:
+    def inference(self, noise: torch.Tensor, text_prompts: List[str], actions: torch.Tensor | None = None) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
         Inputs:
@@ -42,6 +54,12 @@ class BidirectionalInferencePipeline(torch.nn.Module):
         conditional_dict = self.text_encoder(
             text_prompts=text_prompts
         )
+        if self.action_encoder is not None and actions is not None:
+            self.action_encoder = self.action_encoder.to(
+                device=noise.device, dtype=torch.float32)
+            actions = actions.to(device=noise.device, dtype=torch.float32)
+            action_embeds = self.action_encoder(actions)
+            conditional_dict["action_embeds"] = action_embeds
 
         # initial point
         noisy_image_or_video = noise
