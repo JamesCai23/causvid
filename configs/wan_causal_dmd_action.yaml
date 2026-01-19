@@ -25,9 +25,9 @@ fake_task_type: bidirectional_video
 denoising_loss_type: flow
 mixed_precision: true
 seed: 0
-wandb_host: WANDB_HOST
-wandb_key: WANDB_KEY
-wandb_entity: tyin
+wandb_host: https://api.wandb.ai
+wandb_key: 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
+wandb_entity: jamescai-thu
 wandb_project: causvid
 wandb_name: wan_causal_dmd_action
 sharding_strategy: hybrid_full
