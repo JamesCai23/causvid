@@ -152,6 +152,14 @@ def main():
             break
 
         video_path = video_paths[global_index]
+        
+        # Check if output latent file already exists
+        output_latent_path = os.path.join(args.output_latent_folder, f"{global_index:08d}.pt")
+        if os.path.exists(output_latent_path):
+            if rank == 0:
+                print(f"Skipping {video_path} - latent file already exists: {output_latent_path}")
+            continue
+        
         if video_info is not None:
             prompt = video_info[video_path]
             action_left = None
@@ -205,12 +213,12 @@ def main():
                     "actions": actions,
                     "start_latent": start_latent.cpu().detach()
                 },
-                os.path.join(args.output_latent_folder, f"{global_index:08d}.pt")
+                output_latent_path
             )
         else:
             torch.save(
                 {prompt: encoded_latents.cpu().detach()},
-                os.path.join(args.output_latent_folder, f"{global_index:08d}.pt")
+                output_latent_path
             )
     if dist.is_initialized():
         dist.barrier()

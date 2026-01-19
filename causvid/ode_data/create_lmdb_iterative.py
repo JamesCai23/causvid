@@ -127,7 +127,7 @@ def main():
     last_written = None
     for index, file in tqdm(enumerate(all_files)):
         # read from disk
-        data_dict = torch.load(file)
+        data_dict = torch.load(file, weights_only=False)
 
         if isinstance(data_dict, dict) and "latents" in data_dict:
             processed = _process_action_sample(data_dict)
