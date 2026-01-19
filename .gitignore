@@ -207,3 +207,4 @@ VBench
 /ckpt
 /wan_models
 /output_latent
+/wan_causal_ode_checkpoint_model_003000

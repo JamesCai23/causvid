@@ -167,8 +167,17 @@ def main():
         else:
             row = metadata_rows[global_index]
             prompt = row["prompt"]
+            if not row.get("action_left") or not row.get("action_right"):
+                raise ValueError(
+                    f"Missing action_left/action_right for {video_path}")
             action_left = os.path.join(args.metadata_dir, row["action_left"])
             action_right = os.path.join(args.metadata_dir, row["action_right"])
+            if not os.path.exists(action_left):
+                raise FileNotFoundError(
+                    f"Missing action_left file for {video_path}: {action_left}")
+            if not os.path.exists(action_right):
+                raise FileNotFoundError(
+                    f"Missing action_right file for {video_path}: {action_right}")
 
         try:
             array = video_to_numpy(os.path.join(
@@ -187,7 +196,10 @@ def main():
         video_tensor = video_tensor.to(torch.bfloat16)
         encoded_latents = encode(model, video_tensor).transpose(2, 1)
 
-        if action_left and action_right:
+        use_actions = action_left is not None and action_right is not None
+        if use_actions:
+            start_frame = video_tensor[:, :, :1]
+            start_latent = encode(model, start_frame).transpose(2, 1)
             actions_left = _extract_actions(action_left, frame_indices)
             actions_right = _extract_actions(action_right, frame_indices)
             actions = np.concatenate([actions_left, actions_right], axis=1)
@@ -200,10 +212,6 @@ def main():
                 actions = np.concatenate([actions, pad], axis=0)
             elif actions.shape[0] > target_latent_frames:
                 actions = actions[:target_latent_frames]
-
-            # start frame latent
-            start_frame = video_tensor[:, :, :1]
-            start_latent = encode(model, start_frame).transpose(2, 1)
 
             torch.save(
                 {

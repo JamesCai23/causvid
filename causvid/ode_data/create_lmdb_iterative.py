@@ -58,6 +58,8 @@ def process_data_dict(data_dict, seen_prompts, dedupe_prompts=True):
 
 
 def _process_action_sample(sample):
+    if "actions" not in sample or "start_latent" not in sample:
+        raise ValueError("Action I2V sample must include actions and start_latent.")
     latents = sample["latents"].half().numpy()
     actions = np.asarray(sample["actions"], dtype=np.float32)
     start_latent = sample["start_latent"].half().numpy()
@@ -125,12 +127,19 @@ def main():
     seen_prompts = set()  # for deduplication
 
     last_written = None
+    expected_keys = None
     for index, file in tqdm(enumerate(all_files)):
         # read from disk
         data_dict = torch.load(file, weights_only=False)
 
         if isinstance(data_dict, dict) and "latents" in data_dict:
             processed = _process_action_sample(data_dict)
+            if expected_keys is None:
+                expected_keys = set(processed.keys())
+            elif set(processed.keys()) != expected_keys:
+                raise ValueError(
+                    f"Inconsistent action sample keys in {file}. Expected {expected_keys}, "
+                    f"got {set(processed.keys())}.")
             store_arrays_to_lmdb(env, processed, start_index=counter)
             counter += len(processed["prompts"])
             last_written = processed

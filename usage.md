@@ -7,7 +7,7 @@ python distillation_data/compute_vae_latent.py \
   --metadata_csv /home/lff/data1/cym/worldmodel/worldmodel_data/results/tree_cut_filtered/metadata.csv \
   --metadata_dir /home/lff/data1/cym/worldmodel/worldmodel_data/results/tree_cut_filtered/metadata \
   --input_video_folder /home/lff/data1/cym/worldmodel/worldmodel_data/results/tree_cut_filtered/videos \
-  --output_latent_folder /home/lff/data1/cym/worldmodel/CausVid/output_latent/tree_cut_filtered \
+  --output_latent_folder /home/lff/data1/cym/worldmodel/CausVid/output_latent/tree_cut_action \
   --target_frames 300 \
   --temporal_stride 4
 ```
@@ -15,8 +15,8 @@ python distillation_data/compute_vae_latent.py \
 3. Build LMDB
 ```bash
 python causvid/ode_data/create_lmdb_iterative.py \
-  --data_path /home/lff/data1/cym/worldmodel/CausVid/output_latent/tree_cut_filtered \
-  --lmdb_path /home/lff/data1/cym/worldmodel/CausVid/output_latent/tree_cut_filtered_lmdb \
+  --data_path /home/lff/data1/cym/worldmodel/CausVid/output_latent/tree_cut_action \
+  --lmdb_path /home/lff/data1/cym/worldmodel/CausVid/output_latent/tree_cut_action_lmdb \
   --no_dedupe_prompts
 ```
 

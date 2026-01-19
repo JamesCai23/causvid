@@ -82,6 +82,10 @@ class ActionI2VLMDBDataset(Dataset):
         self.latents_shape = get_array_shape_from_lmdb(self.env, 'latents')
         self.actions_shape = get_array_shape_from_lmdb(self.env, 'actions')
         self.start_latent_shape = get_array_shape_from_lmdb(self.env, 'start_latent')
+        if self.actions_shape[1] != self.latents_shape[1]:
+            raise ValueError(
+                f"actions frames ({self.actions_shape[1]}) must match latents frames "
+                f"({self.latents_shape[1]}).")
         self.max_pair = max_pair
 
     def __len__(self):

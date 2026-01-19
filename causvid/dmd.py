@@ -570,10 +570,20 @@ class DMD_I2V(nn.Module):
         # this will be init later with fsdp-wrapped modules
         self.inference_pipeline: InferencePipelineInterface = None
 
-
-        self.action_encoder = get_action_encoder_wrapper(
-            model_name=args.action_encoder_name)()
-        self.action_encoder.requires_grad_(False)
+        self.use_start_latent = getattr(args, "use_start_latent", False)
+        self.action_encoder = None
+        if getattr(args, "action_cond", False):
+            action_encoder_name = getattr(
+                args, "action_encoder_name", "action_mlp")
+            action_dim = getattr(args, "action_dim", 14)
+            action_hidden_dim = getattr(args, "action_hidden_dim", 512)
+            action_embed_dim = getattr(args, "action_embed_dim", 4096)
+            self.action_encoder = get_action_encoder_wrapper(action_encoder_name)(
+                input_dim=action_dim,
+                hidden_dim=action_hidden_dim,
+                output_dim=action_embed_dim
+            )
+            self.action_encoder.requires_grad_(False)
 
         # Step 2: Initialize all dmd hyperparameters
 
@@ -794,7 +804,7 @@ class DMD_I2V(nn.Module):
 
         return self.inference_pipeline.inference_with_trajectory(noise=noise, conditional_dict=conditional_dict)
 
-    def _run_generator(self, image_or_video_shape, conditional_dict: dict, unconditional_dict: dict, clean_latent: torch.tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _run_generator(self, image_or_video_shape, conditional_dict: dict, unconditional_dict: dict, clean_latent: torch.tensor, start_latent=None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Optionally simulate the generator's input from noise using backward simulation
         and then run the generator for one-step.
@@ -849,13 +859,29 @@ class DMD_I2V(nn.Module):
 
         timestep = self.denoising_step_list[index]
 
+        gradient_mask = None
+        if self.use_start_latent and start_latent is not None:
+            if start_latent.ndim == 4:
+                start_latent = start_latent.unsqueeze(1)
+            start_latent = start_latent.to(
+                device=noisy_input.device, dtype=noisy_input.dtype)
+            if self.num_frame_per_block > 1 and start_latent.shape[1] == 1:
+                start_latent = start_latent.repeat(
+                    1, self.num_frame_per_block, 1, 1, 1)
+            num_cond_frames = min(start_latent.shape[1], noisy_input.shape[1])
+            if num_cond_frames > 0:
+                noisy_input = noisy_input.clone()
+                noisy_input[:, :num_cond_frames] = start_latent[:, :num_cond_frames]
+                timestep = timestep.clone()
+                timestep[:, :num_cond_frames] = 0
+                gradient_mask = torch.ones_like(noisy_input, dtype=torch.bool)
+                gradient_mask[:, :num_cond_frames] = False
+
         pred_image_or_video = self.generator(
             noisy_image_or_video=noisy_input,
             conditional_dict=conditional_dict,
             timestep=timestep
         )
-
-        gradient_mask = None  # timestep != 0
 
         # pred_image_or_video = noisy_input * \
         #     (1-gradient_mask.float()).reshape(*gradient_mask.shape, 1, 1, 1) + \
@@ -865,7 +891,7 @@ class DMD_I2V(nn.Module):
 
         return pred_image_or_video, gradient_mask
 
-    def generator_loss(self, image_or_video_shape, conditional_dict: dict, unconditional_dict: dict, clean_latent: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+    def generator_loss(self, image_or_video_shape, conditional_dict: dict, unconditional_dict: dict, clean_latent: torch.Tensor, start_latent=None) -> Tuple[torch.Tensor, dict]:
         """
         Generate image/videos from noise and compute the DMD loss.
         The noisy input to the generator is backward simulated.
@@ -885,7 +911,8 @@ class DMD_I2V(nn.Module):
             image_or_video_shape=image_or_video_shape,
             conditional_dict=conditional_dict,
             unconditional_dict=unconditional_dict,
-            clean_latent=clean_latent
+            clean_latent=clean_latent,
+            start_latent=start_latent
         )
 
         # Step 2: Compute the DMD loss
@@ -900,7 +927,7 @@ class DMD_I2V(nn.Module):
 
         return dmd_loss, dmd_log_dict
 
-    def critic_loss(self, image_or_video_shape, conditional_dict: dict, unconditional_dict: dict, clean_latent: torch.Tensor) -> Tuple[torch.Tensor, dict]:
+    def critic_loss(self, image_or_video_shape, conditional_dict: dict, unconditional_dict: dict, clean_latent: torch.Tensor, start_latent=None) -> Tuple[torch.Tensor, dict]:
         """
         Generate image/videos from noise and train the critic with generated samples.
         The noisy input to the generator is backward simulated.
@@ -922,7 +949,8 @@ class DMD_I2V(nn.Module):
                 image_or_video_shape=image_or_video_shape,
                 conditional_dict=conditional_dict,
                 unconditional_dict=unconditional_dict,
-                clean_latent=clean_latent
+                clean_latent=clean_latent,
+                start_latent=start_latent
             )
 
         # Step 2: Compute the fake prediction

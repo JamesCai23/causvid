@@ -110,7 +110,14 @@ class WanDiffusionWrapper(DiffusionModelInterface):
         super().post_init()
 
     def enable_gradient_checkpointing(self) -> None:
-        self.model.enable_gradient_checkpointing()
+        try:
+            self.model.enable_gradient_checkpointing()
+        except TypeError:
+            # Support older/custom _set_gradient_checkpointing signature.
+            if hasattr(self.model, "_set_gradient_checkpointing"):
+                self.model._set_gradient_checkpointing(self.model, True)
+            else:
+                raise
 
     def _convert_flow_pred_to_x0(self, flow_pred: torch.Tensor, xt: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
         """

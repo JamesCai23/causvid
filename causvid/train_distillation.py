@@ -6,7 +6,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
     
-from causvid.data import ODERegressionLMDBDataset
+from causvid.data import ODERegressionLMDBDataset, ActionI2VLMDBDataset
 from causvid.models import get_block_class
 from causvid.data import TextDataset
 from causvid.util import (
@@ -19,7 +19,7 @@ from causvid.util import (
 )
 import torch.distributed as dist
 from omegaconf import OmegaConf
-from causvid.dmd import DMD
+from causvid.dmd import DMD, DMD_I2V
 import argparse
 import torch
 import wandb
@@ -55,7 +55,10 @@ class Trainer:
 
         # Step 2: Initialize the model and optimizer
         if config.distillation_loss == "dmd":
-            self.distillation_model = DMD(config, device=self.device)
+            if getattr(config, "use_start_latent", False) or getattr(config, "action_cond", False):
+                self.distillation_model = DMD_I2V(config, device=self.device)
+            else:
+                self.distillation_model = DMD(config, device=self.device)
         else:
             raise ValueError("Invalid distillation loss type")
 
@@ -120,8 +123,12 @@ class Trainer:
         if self.backward_simulation:
             dataset = TextDataset(config.data_path)
         else:
-            dataset = ODERegressionLMDBDataset(
-                config.data_path, max_pair=int(1e8))
+            if getattr(config, "use_start_latent", False) or getattr(config, "action_cond", False):
+                dataset = ActionI2VLMDBDataset(
+                    config.data_path, max_pair=int(1e8))
+            else:
+                dataset = ODERegressionLMDBDataset(
+                    config.data_path, max_pair=int(1e8))
         sampler = torch.utils.data.distributed.DistributedSampler(
             dataset, shuffle=True, drop_last=True)
         dataloader = torch.utils.data.DataLoader(
@@ -161,11 +168,15 @@ class Trainer:
             torch.cuda.empty_cache()
 
         # Step 1: Get the next batch of text prompts
+        actions = None
+        start_latent = None
         if not self.backward_simulation:
             batch = next(self.dataloader)
             text_prompts = batch["prompts"]
             clean_latent = batch["ode_latent"][:, -1].to(
                 device=self.device, dtype=self.dtype)
+            actions = batch.get("actions", None)
+            start_latent = batch.get("start_latent", None)
         else:
             text_prompts = next(self.dataloader)
             clean_latent = None
@@ -178,6 +189,14 @@ class Trainer:
         with torch.no_grad():
             conditional_dict = self.distillation_model.text_encoder(
                 text_prompts=text_prompts)
+            if getattr(self.config, "action_cond", False) and actions is not None:
+                action_encoder = getattr(self.distillation_model, "action_encoder", None)
+                if action_encoder is None:
+                    raise ValueError("action_cond is enabled but action_encoder is not initialized.")
+                actions = actions.to(device=self.device, dtype=torch.float32)
+                action_encoder = action_encoder.to(
+                    device=self.device, dtype=torch.float32)
+                conditional_dict["action_embeds"] = action_encoder(actions)
 
             if not getattr(self, "unconditional_dict", None):
                 unconditional_dict = self.distillation_model.text_encoder(
@@ -190,12 +209,21 @@ class Trainer:
 
         # Step 3: Train the generator
         if TRAIN_GENERATOR:
-            generator_loss, generator_log_dict = self.distillation_model.generator_loss(
-                image_or_video_shape=image_or_video_shape,
-                conditional_dict=conditional_dict,
-                unconditional_dict=unconditional_dict,
-                clean_latent=clean_latent
-            )
+            if getattr(self.distillation_model, "use_start_latent", False):
+                generator_loss, generator_log_dict = self.distillation_model.generator_loss(
+                    image_or_video_shape=image_or_video_shape,
+                    conditional_dict=conditional_dict,
+                    unconditional_dict=unconditional_dict,
+                    clean_latent=clean_latent,
+                    start_latent=start_latent
+                )
+            else:
+                generator_loss, generator_log_dict = self.distillation_model.generator_loss(
+                    image_or_video_shape=image_or_video_shape,
+                    conditional_dict=conditional_dict,
+                    unconditional_dict=unconditional_dict,
+                    clean_latent=clean_latent
+                )
 
             self.generator_optimizer.zero_grad()
             generator_loss.backward()
@@ -206,12 +234,21 @@ class Trainer:
             generator_log_dict = {}
 
         # Step 4: Train the critic
-        critic_loss, critic_log_dict = self.distillation_model.critic_loss(
-            image_or_video_shape=image_or_video_shape,
-            conditional_dict=conditional_dict,
-            unconditional_dict=unconditional_dict,
-            clean_latent=clean_latent
-        )
+        if getattr(self.distillation_model, "use_start_latent", False):
+            critic_loss, critic_log_dict = self.distillation_model.critic_loss(
+                image_or_video_shape=image_or_video_shape,
+                conditional_dict=conditional_dict,
+                unconditional_dict=unconditional_dict,
+                clean_latent=clean_latent,
+                start_latent=start_latent
+            )
+        else:
+            critic_loss, critic_log_dict = self.distillation_model.critic_loss(
+                image_or_video_shape=image_or_video_shape,
+                conditional_dict=conditional_dict,
+                unconditional_dict=unconditional_dict,
+                clean_latent=clean_latent
+            )
 
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
